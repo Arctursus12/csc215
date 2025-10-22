@@ -8,3 +8,9 @@ Program building blocks:
   - "nesting" done by stack
 - show simplified program schematic
 - focus on one subroutine = one task
+- CO -> console Output, sends character in accumulator to CON device, preserves other registers
+- CI -> receives a single ASCII character from the console
+- difference between them is the change in the BDOS code across WCONF to RCONF (read console function vs write), and ANI 7FH (ANd Immediate value with accumulator)
+- used to mask off the high order bit, should always be done when received an ASCII character, to allow parity bits
+- START establishes the user stack
+- START1 introduces ComPare Immediate (CPI) to check current input character for CTRL Z (our interrupt)
