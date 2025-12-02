@@ -18,8 +18,10 @@ WCONF   EQU 2
 RBUFF   EQU 10
 
 ; CP/M Disk Functions
+INITF   EQU 13
 OPENF   EQU 15
 CLOSF   EQU 16
+DELEF   EQU 19
 READF   EQU 20
 WRITF   EQU 21
 MAKEF   EQU 22
@@ -41,6 +43,14 @@ START:  LXI SP,STAK     ; Initialize stack pointer
     XRA A           ; A = 0
     STA COUNTER     ; Initialize counter to 0
     STA COUNTER+1
+
+    ; Clear output FCB (except drive and filename)
+    LXI H,OUTFCB+12 ; Start at EX field
+    MVI B,24        ; Clear 24 bytes
+CLRFCB: MVI M,0
+    INX H
+    DCR B
+    JNZ CLRFCB
 
     ; Check if filename was provided on command line
     ; CP/M parses first argument into default FCB at 5CH
@@ -147,6 +157,15 @@ CONVLOOP:
     CALL    COMSG
     CALL    CCRLF
 
+    ; Reset disk system before file operations
+    MVI C,INITF
+    CALL    BDOS
+
+    ; Delete any existing RESULT.TXT
+    LXI D,OUTFCB
+    MVI C,DELEF
+    CALL    BDOS
+
     ; Create output file
     LXI D,OUTFCB
     MVI C,MAKEF
@@ -154,7 +173,17 @@ CONVLOOP:
     CPI BDERR
     JZ  CANTCREATE
 
-    ; Copy result to DMA buffer
+    ; Fill entire buffer with CTRLZ first
+    LXI H,DMABUF
+    MVI B,128
+    MVI A,CTRLZ
+FILLLOOP:
+    MOV M,A
+    INX H
+    DCR B
+    JNZ FILLLOOP
+
+    ; Copy result to start of buffer
     LHLD    NUMPTR
     LXI D,DMABUF
 COPYLOOP:
@@ -173,31 +202,24 @@ COPYDONE:
     INX D
     MVI A,LF
     STAX    D
-    INX D
 
-    ; Pad rest of sector with CTRLZ
-    MVI A,CTRLZ
-PADLOOP:
-    STAX    D
-    INX D
-    LXI H,DMABUF+128
-    CALL    CMPHD       ; Compare HL and DE
-    JNZ PADLOOP
-
-    ; Write output file
+    ; Set DMA and write
     LXI D,DMABUF
     MVI C,SDMAF
     CALL    BDOS
+
     LXI D,OUTFCB
     MVI C,WRITF
     CALL    BDOS
     ORA A
     JNZ WRITEERR
 
-    ; Close output file
+    ; Close file
     LXI D,OUTFCB
     MVI C,CLOSF
     CALL    BDOS
+    CPI BDERR
+    JZ  WRITEERR
 
     ; Display success message
     LXI H,DONEMSG
@@ -322,7 +344,7 @@ DIV16D: MOV A,L         ; Remainder to A
 ;============== Data Areas ==============
 ; File Control Blocks
 INFCB:  DS  36          ; Input file FCB
-OUTFCB: DB  0           ; Output FCB
+OUTFCB: DB  4           ; Output FCB - Drive D:
     DB  'RESULT  '
     DB  'TXT'
     DS  24
