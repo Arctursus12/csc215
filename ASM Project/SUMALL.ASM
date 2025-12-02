@@ -1,3 +1,5 @@
+; Nikita Kolesnikov – CSC215, 2025-26
+; Presented by Sean Evans
 ; SUMALL.ASM - Sum all single decimal digits in a file
 ; Usage: SUMALL filename.txt
 ; Output: Displays sum and writes to RESULT.TXT
