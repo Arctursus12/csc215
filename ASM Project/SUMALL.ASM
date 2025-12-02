@@ -1,196 +1,118 @@
-; SUMALL.ASM - Sum all numbers in a file and write result to RESULT.TXT
-; Rewritten to use library code from textbook_files
-; Library code is inlined for standalone CP/M execution
+; SUMALL.ASM - Sum all single decimal digits in a file
+; Usage: SUMALL filename.txt
+; Output: Displays sum and writes to RESULT.TXT
+;
+; This program reads a text file and sums all single digit values (0-9)
+; found in it, ignoring all other characters.
+; Uses library code from DISKEQU.LIB, CPMIO.LIB, and CH13.LIB
 
 ;============== BEGIN DISKEQU.LIB - CP/M System Equates ==============
-; ASCII CHARACTERS
+; ASCII Characters
 CR  EQU 0DH
 LF  EQU 0AH
 CTRLZ   EQU 1AH
 
-; CP/M BDOS FUNCTIONS
+; CP/M BDOS Functions
 RCONF   EQU 1
 WCONF   EQU 2
 RBUFF   EQU 10
 
-; CP/M DISK ACCESS FUNCTIONS
-INITF   EQU 13
+; CP/M Disk Functions
 OPENF   EQU 15
 CLOSF   EQU 16
-FINDF   EQU 17
-DELEF   EQU 19
 READF   EQU 20
 WRITF   EQU 21
 MAKEF   EQU 22
 SDMAF   EQU 26
 
-; CP/M ADDRESSES
+; CP/M Addresses
 RBOOT   EQU 0
-DRIVE   EQU 4
 BDOS    EQU 5
-MEMAX   EQU 7
 TFCB    EQU 5CH
-FCBTY   EQU TFCB+9
-FCBEX   EQU TFCB+12
-FCBS2   EQU TFCB+14
-FCBRC   EQU TFCB+15
-FCBCR   EQU TFCB+32
 TPA EQU 100H
 
-; CP/M FLAGS
-BDAOK   EQU 0
-BDER1   EQU 1
-BDER2   EQU 2
+; CP/M Error Codes
 BDERR   EQU 255
 ;============== END DISKEQU.LIB ==============
 
     ORG TPA
 
 START:  LXI SP,STAK     ; Initialize stack pointer
-    XRA A           ; A = 0 (XOR A with itself)
-    STA COUNTER     ; Store 0 to counter low byte
-    STA COUNTER+1   ; Store 0 to counter high byte
-    STA TEMPNUM     ; Store 0 to temp accumulator low byte
-    STA TEMPNUM+1   ; Store 0 to temp accumulator high byte
-    STA INNUM       ; Not currently in a number
+    XRA A           ; A = 0
+    STA COUNTER     ; Initialize counter to 0
+    STA COUNTER+1
 
-    ; Parse command line for filename
-    ; CP/M command tail is at 80H: byte 0 = length, bytes 1-127 = command
-    LDA 80H         ; Get command tail length
-    ORA A           ; Check if zero
-    JZ  NOARG       ; No argument provided
+    ; Check if filename was provided on command line
+    ; CP/M parses first argument into default FCB at 5CH
+    LDA TFCB+1      ; Get first character of filename
+    CPI ' '         ; Check if space (no filename)
+    JZ  NOARG       ; No filename provided
 
-    ; Parse the command line and copy to FCB
-    ; CP/M places first parsed FCB at 5CH (default FCB1)
-    ; We'll copy it to our INFCB
-    LXI H,5CH       ; HL = default FCB1 (parsed by CP/M)
-    LXI D,INFCB     ; DE = our input FCB
-    MVI B,36        ; Copy 36 bytes (entire FCB)
+    ; Copy default FCB to our input FCB
+    LXI H,TFCB      ; Source: default FCB
+    LXI D,INFCB     ; Destination: our FCB
+    MVI B,36        ; Copy entire FCB (36 bytes)
 COPYFCB:
-    MOV A,M         ; Get byte from default FCB
-    STAX    D           ; Store to our FCB
+    MOV A,M
+    STAX    D
     INX H
     INX D
     DCR B
     JNZ COPYFCB
 
-    ; Check if a filename was actually provided (first char of name != space)
-    LDA 5CH+1       ; Get first character of filename
-    CPI ' '         ; Check if space (no filename)
-    JZ  NOARG       ; No valid filename
-
     ; Open input file
-    LXI D,INFCB     ; DE points to input FCB
-    MVI C,OPENF     ; Open file function
+    LXI D,INFCB
+    MVI C,OPENF
     CALL    BDOS
-    CPI 0FFH        ; 0FFH = file not found
-    JZ  NOFILE      ; Jump if file not found
+    CPI BDERR       ; Check for error (255)
+    JZ  NOFILE
 
-    ; Set DMA to input buffer
+    ; Set DMA address to our buffer
     LXI D,DMABUF
     MVI C,SDMAF
     CALL    BDOS
 
+    ; Read and process file
 READLOOP:
-    ; Read from input file
     LXI D,INFCB
     MVI C,READF
     CALL    BDOS
-    CPI 0           ; 0 = successful read
-    JNZ READDONE    ; Non-zero = EOF or error
+    ORA A           ; Check if successful (A=0)
+    JNZ READDONE    ; EOF or error
 
-    ; Process buffer - parse numbers and add to counter
-    LXI H,DMABUF    ; HL points to start of buffer
-    MVI B,128       ; B = bytes to process (CP/M sector size)
+    ; Process the 128-byte buffer
+    LXI H,DMABUF
+    MVI B,128       ; Process 128 bytes
 
 PROCBUF:
-    MOV A,M         ; Get character from buffer
+    MOV A,M         ; Get character
     CPI CTRLZ       ; Check for EOF marker
-    JZ  ENDNUM      ; Finalize current number if any, then done
-    CPI CR          ; Check for carriage return
-    JZ  SEPARATOR
-    CPI LF          ; Check for line feed
-    JZ  SEPARATOR
-    CPI ' '         ; Check for space
-    JZ  SEPARATOR
-    CPI 9           ; Check for tab
-    JZ  SEPARATOR
-    CPI '0'         ; Check if digit
-    JC  NEXTCHAR    ; Less than '0', skip
-    CPI '9'+1       ; Check if digit
-    JNC NEXTCHAR    ; Greater than '9', skip
+    JZ  READDONE
+    CPI '0'         ; Check if >= '0'
+    JC  NEXTCHAR    ; Skip if less
+    CPI '9'+1       ; Check if <= '9'
+    JNC NEXTCHAR    ; Skip if greater
 
-    ; Valid digit - accumulate into TEMPNUM
-    SUI '0'         ; Convert ASCII to numeric (0-9)
-    PUSH    H           ; Save buffer pointer
-    PUSH    B           ; Save loop counter
-    PUSH    PSW         ; Save digit value
-
-    ; Mark that we're in a number
-    MVI A,1
-    STA INNUM
-
-    ; Multiply TEMPNUM by 10
-    LHLD    TEMPNUM     ; Load current temp number
-    CALL    MUL10       ; HL = HL * 10
-
-    ; Add the new digit
-    POP PSW         ; Restore digit value (0-9)
+    ; Valid digit - add to counter
+    SUI '0'         ; Convert ASCII to value (0-9)
     MOV E,A
-    MVI D,0         ; DE = digit
-    DAD D           ; HL = HL + digit
-    SHLD    TEMPNUM     ; Store back to TEMPNUM
-
-    POP B           ; Restore loop counter
-    POP H           ; Restore buffer pointer
-    JMP NEXTCHAR
-
-SEPARATOR:
-    ; Hit a separator (space, CR, LF, tab)
-    ; If we were in a number, add TEMPNUM to COUNTER and reset
-    PUSH    H
-    PUSH    B
-    LDA INNUM
-    ORA A           ; Check if we were in a number
-    JZ  SEPSKIP     ; Not in a number, skip
-
-    ; Add TEMPNUM to COUNTER
-    LHLD    COUNTER
-    XCHG                ; DE = COUNTER
-    LHLD    TEMPNUM
-    DAD D           ; HL = TEMPNUM + COUNTER
-    SHLD    COUNTER     ; Store result
-
-    ; Reset TEMPNUM and INNUM
-    XRA A
-    STA TEMPNUM
-    STA TEMPNUM+1
-    STA INNUM
-
-SEPSKIP:
+    MVI D,0         ; DE = digit value
+    XCHG                ; HL = digit, DE = buffer ptr
+    PUSH    D           ; Save buffer pointer
+    PUSH    B           ; Save loop counter
+    XCHG                ; DE = digit
+    LHLD    COUNTER     ; HL = current counter
+    DAD D           ; HL = counter + digit
+    SHLD    COUNTER     ; Save new counter
     POP B
-    POP H
-    JMP NEXTCHAR
+    POP H           ; Restore buffer pointer
 
 NEXTCHAR:
-    INX H           ; Move to next character
-    DCR B           ; Decrement counter
-    JNZ PROCBUF     ; Continue if more characters
+    INX H
+    DCR B
+    JNZ PROCBUF
 
-    JMP READLOOP    ; Read next sector
-
-ENDNUM:
-    ; Finalize any number in progress before ending
-    LDA INNUM
-    ORA A
-    JZ  READDONE    ; No number in progress, done
-
-    ; Add TEMPNUM to COUNTER
-    LHLD    COUNTER
-    XCHG                ; DE = COUNTER
-    LHLD    TEMPNUM
-    DAD D           ; HL = TEMPNUM + COUNTER
-    SHLD    COUNTER     ; Store result
+    JMP READLOOP
 
 READDONE:
     ; Close input file
@@ -199,60 +121,53 @@ READDONE:
     CALL    BDOS
 
     ; Convert counter to decimal string
-    LHLD    COUNTER     ; Load counter value into HL
-    LXI D,NUMBUF+5      ; DE points to end of 6-byte buffer
-    XRA A               ; A = 0
-    STAX    D           ; Store null terminator at end
+    LHLD    COUNTER
+    LXI D,NUMBUF+5  ; Point to end of buffer
+    XRA A
+    STAX    D           ; Null terminator
 
-    ; Extract digits by repeated division by 10
 CONVLOOP:
-    CALL    DIV16       ; HL = HL / 10, A = remainder (0-9)
-    ADI '0'         ; Convert digit to ASCII ('0'-'9')
-    DCX D           ; Move buffer pointer left
-    STAX    D           ; Store ASCII digit in buffer
-    MOV A,H         ; Check if quotient is zero
-    ORA L           ; Set flags based on H OR L
-    JNZ CONVLOOP    ; If HL != 0, continue extracting digits
+    CALL    DIV16       ; Divide by 10, remainder in A
+    ADI '0'         ; Convert to ASCII
+    DCX D
+    STAX    D
+    MOV A,H
+    ORA L
+    JNZ CONVLOOP
 
-    ; DE now points to first digit of number string
-    XCHG                ; HL now points to first digit
-    SHLD    NUMPTR      ; Save pointer to number string
+    ; DE now points to first digit
+    XCHG                ; HL = pointer to number string
+    SHLD    NUMPTR
 
-    ; Print "Sum: " to console
-    PUSH    H           ; Save number pointer
+    ; Display result to console
+    PUSH    H
     LXI H,SUMMSG
-    CALL    COMSG       ; Use library routine
-    POP H           ; Restore number pointer
+    CALL    COMSG
+    POP H
+    CALL    COMSG
+    CALL    CCRLF
 
-    ; Print number to console
-    CALL    COMSG       ; Use library routine
-
-    ; Print newline to console
-    CALL    CCRLF       ; Use library routine
-
-    ; Now write to output file
     ; Create output file
     LXI D,OUTFCB
     MVI C,MAKEF
     CALL    BDOS
-    CPI 0FFH        ; 0FFH = directory full
+    CPI BDERR
     JZ  CANTCREATE
 
-    ; Copy result to DMA buffer for writing to file
-    LHLD    NUMPTR      ; Load pointer to number string
-    LXI D,DMABUF    ; DE = destination
-
+    ; Copy result to DMA buffer
+    LHLD    NUMPTR
+    LXI D,DMABUF
 COPYLOOP:
-    MOV A,M         ; Get character from number buffer
-    ORA A           ; Check for null terminator
+    MOV A,M
+    ORA A
     JZ  COPYDONE
-    STAX    D           ; Store in DMA buffer
-    INX H           ; Next source
-    INX D           ; Next destination
+    STAX    D
+    INX H
+    INX D
     JMP COPYLOOP
 
 COPYDONE:
-    ; Add CR/LF to output file
+    ; Add CR/LF
     MVI A,CR
     STAX    D
     INX D
@@ -260,26 +175,23 @@ COPYDONE:
     STAX    D
     INX D
 
-    ; Pad rest of sector with Ctrl-Z (EOF marker)
+    ; Pad rest of sector with CTRLZ
     MVI A,CTRLZ
-    MVI B,128
-    LXI H,DMABUF
 PADLOOP:
-    MOV M,A
-    INX H
-    DCR B
+    STAX    D
+    INX D
+    LXI H,DMABUF+128
+    CALL    CMPHD       ; Compare HL and DE
     JNZ PADLOOP
 
-    ; Set DMA to output buffer
+    ; Write output file
     LXI D,DMABUF
     MVI C,SDMAF
     CALL    BDOS
-
-    ; Write to output file
     LXI D,OUTFCB
     MVI C,WRITF
     CALL    BDOS
-    CPI 0           ; 0 = success
+    ORA A
     JNZ WRITEERR
 
     ; Close output file
@@ -287,30 +199,30 @@ PADLOOP:
     MVI C,CLOSF
     CALL    BDOS
 
-    ; Print success message to console
+    ; Display success message
     LXI H,DONEMSG
-    CALL    COMSG       ; Use library routine
+    CALL    COMSG
+    JMP RBOOT
 
-    JMP RBOOT       ; Return to CP/M
-
+;============== Error Handlers ==============
 NOARG:
     LXI H,USAGEMSG
-    CALL    COMSG       ; Use library routine
+    CALL    COMSG
     JMP RBOOT
 
 NOFILE:
     LXI H,NOFMSG
-    CALL    COMSG       ; Use library routine
+    CALL    COMSG
     JMP RBOOT
 
 CANTCREATE:
     LXI H,CANTMSG
-    CALL    COMSG       ; Use library routine
+    CALL    COMSG
     JMP RBOOT
 
 WRITEERR:
     LXI H,WRITERRMSG
-    CALL    COMSG       ; Use library routine
+    CALL    COMSG
     JMP RBOOT
 
 ;============== BEGIN CPMIO.LIB - Console I/O Routines ==============
@@ -370,93 +282,67 @@ CIMSG:  PUSH    B
     POP D
     POP B
     RET
-
-TWOCR:  CALL    CCRLF
-    JMP CCRLF
 ;============== END CH13.LIB ==============
 
-; Multiply HL by 10
-; Input:  HL = value to multiply
-; Output: HL = HL * 10
-; Method: HL * 10 = (HL * 8) + (HL * 2) = (HL << 3) + (HL << 1)
-; Uses:   DE for temporary storage
-MUL10:  PUSH    D
-    MOV D,H         ; DE = HL (save original)
-    MOV E,L
-    ; HL << 1 (multiply by 2)
-    DAD H           ; HL = HL * 2
-    ; Save HL * 2 in BC temporarily via stack
-    PUSH    H           ; Save HL * 2
-    ; HL << 2 more (to get HL * 8 total)
-    DAD H           ; HL = HL * 4
-    DAD H           ; HL = HL * 8
-    ; Add HL * 2 (from stack) to HL * 8
-    POP D           ; DE = HL * 2
-    DAD D           ; HL = (HL * 8) + (HL * 2) = HL * 10
-    POP D
+;============== Utility Routines ==============
+; Compare HL and DE
+; Returns: Zero flag set if equal
+CMPHD:  MOV A,H
+    CMP D
+    RNZ
+    MOV A,L
+    CMP E
     RET
 
-; Divide HL by 10 using repeated subtraction
-; Input:  HL = dividend (16-bit number to divide)
-; Output: HL = quotient (HL / 10)
-;         A  = remainder (HL mod 10, range 0-9)
-; Uses:   BC as quotient accumulator
-DIV16:  PUSH    B           ; Save BC register
-    LXI B,0         ; BC = 0 (quotient counter)
-DIV16L: ; Check if HL >= 10
-    MOV A,H         ; Load high byte
-    ORA A           ; Test if H != 0
-    JNZ DIV16S      ; If H != 0, then HL >= 256 >= 10
-    MOV A,L         ; Load low byte
-    CPI 10          ; Compare L with 10
-    JC  DIV16D      ; If L < 10, we're done
-DIV16S: ; Subtract 10 from HL (16-bit subtraction)
-    MOV A,L         ; Get low byte
-    SUI 10          ; Subtract 10 from low byte
-    MOV L,A         ; Store result in L
-    MOV A,H         ; Get high byte
-    SBI 0           ; Subtract borrow from high byte
-    MOV H,A         ; Store result in H
-    ; Increment quotient counter
-    INX B           ; BC = BC + 1
-    JMP DIV16L      ; Loop back to check again
-DIV16D: ; HL now contains remainder (< 10)
-    MOV A,L         ; Move remainder to A
-    MOV H,B         ; Move quotient from BC to HL
+; Divide HL by 10 (from COUNTER.ASM)
+; Input:  HL = dividend
+; Output: HL = quotient, A = remainder (0-9)
+DIV16:  PUSH    B
+    LXI B,0         ; Quotient counter
+DIV16L: MOV A,H
+    ORA A
+    JNZ DIV16S
+    MOV A,L
+    CPI 10
+    JC  DIV16D
+DIV16S: MOV A,L
+    SUI 10
+    MOV L,A
+    MOV A,H
+    SBI 0
+    MOV H,A
+    INX B
+    JMP DIV16L
+DIV16D: MOV A,L         ; Remainder to A
+    MOV H,B         ; Quotient to HL
     MOV L,C
-    POP B           ; Restore BC
+    POP B
     RET
 
-; Input File Control Block (FCB)
-; Format: 1 byte drive (0=default), 8 bytes filename, 3 bytes extension
-INFCB:  DB  0           ; Drive (0 = default)
-    DB  'INPUT   '  ; 8-character filename (space-padded)
-    DB  'TXT'       ; 3-character extension
-    DS  24          ; Rest of FCB (36 bytes total)
+;============== Data Areas ==============
+; File Control Blocks
+INFCB:  DS  36          ; Input file FCB
+OUTFCB: DB  0           ; Output FCB
+    DB  'RESULT  '
+    DB  'TXT'
+    DS  24
 
-; Output File Control Block
-OUTFCB: DB  0           ; Drive (0 = default)
-    DB  'RESULT  '  ; 8-character filename
-    DB  'TXT'       ; 3-character extension
-    DS  24          ; Rest of FCB
-
-; Messages (null-terminated for COMSG)
+; Messages (null-terminated)
 USAGEMSG:   DB  'Usage: SUMALL filename.txt',CR,LF,0
 SUMMSG: DB  'Sum: ',0
-NOFMSG: DB  'Input file not found.',CR,LF,0
+NOFMSG: DB  'File not found.',CR,LF,0
 CANTMSG:    DB  'Cannot create RESULT.TXT.',CR,LF,0
-WRITERRMSG: DB  'Error writing to RESULT.TXT.',CR,LF,0
+WRITERRMSG: DB  'Error writing RESULT.TXT.',CR,LF,0
 DONEMSG:    DB  'Sum written to RESULT.TXT.',CR,LF,0
 
-COUNTER:    DW  0       ; 16-bit counter (sum of all numbers)
-TEMPNUM:    DW  0       ; 16-bit temporary accumulator for current number
-INNUM:  DB  0       ; Flag: 1 if currently parsing a number, 0 otherwise
-NUMPTR: DW  0       ; Pointer to number string
-NUMBUF: DS  6       ; Buffer for number string
-INBUF:  DS  83      ; Input buffer for CIMSG (from CH13.LIB)
-DMABUF: DS  128     ; DMA buffer (CP/M sector = 128 bytes)
+; Variables
+COUNTER:    DW  0           ; 16-bit sum
+NUMPTR: DW  0           ; Pointer to number string
+NUMBUF: DS  6           ; Number conversion buffer
+INBUF:  DS  83          ; Input buffer for CIMSG
+DMABUF: DS  128         ; DMA buffer (CP/M sector size)
 
-    DS  64
+    DS  64          ; Stack space
 STAK:   DB  0
 
     END
