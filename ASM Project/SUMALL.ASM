@@ -7,6 +7,7 @@
 ; This program reads a text file and sums all single digit values (0-9)
 ; found in it, ignoring all other characters.
 ; Uses library code from DISKEQU.LIB, CPMIO.LIB, and CH13.LIB
+; File write sequence based on PUT.LIB pattern
 
 ;============== BEGIN DISKEQU.LIB - CP/M System Equates ==============
 ; ASCII Characters
