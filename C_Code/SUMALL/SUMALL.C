@@ -1,5 +1,9 @@
 #include <stdio.h>
-
+/* Nikita Kolesnikov – CSC215, 2025-26
+Presented by Sean Evans
+SUMALL.ASM - Sum all single decimal digits in a file
+Usage: SUMALL filename.ext
+Output: Displays sum and writes to RESULT.TXT */
 #define CTRLZ 0x1A
 
 /* Function prototypes */
